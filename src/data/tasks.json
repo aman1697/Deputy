@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "The task catalog. This file is the only thing that needs editing to add a",
+    "capability: drop a script in src/scripts/ and describe it here. The router",
+    "prompt and the executor both read from this file, so neither needs code",
+    "changes.",
+    "",
+    "id             - what the model selects. Stable; treat it as an API name.",
+    "type           - powershell | python | builtin | noop",
+    "executor       - script filename in src/scripts/, or the builtin's name",
+    "description    - shown to the router model; this is what drives routing",
+    "allow_args     - the task accepts arguments at all (default false)",
+    "args_allowlist - every supplied arg must appear here verbatim. Only list",
+    "                 flags that are safe in any combination; anything taking",
+    "                 a free-form value cannot be allowlisted this way.",
+    "",
+    "Script-backed tasks whose file is missing are hidden from the router until",
+    "the script exists, so an entry can be added before it is implemented."
+  ],
+  "tasks": [
+    {
+      "id": "get-active-app",
+      "type": "powershell",
+      "executor": "get-active-app.ps1",
+      "description": "The application or window the user is focused on right now: what they are currently working on, what is in the foreground, what is open on screen. Returns the app name by default; pass -Format json for the window title, process id and idle seconds as well.",
+      "allow_args": true,
+      "args_allowlist": ["-Format", "name", "json", "line", "title"]
+    },
+    {
+      "id": "collect-logs",
+      "type": "python",
+      "executor": "collect_logs.py",
+      "description": "Collect application and system logs for diagnostics: log files, recent errors, crashes, traces.",
+      "allow_args": true
+    },
+    {
+      "id": "host-info",
+      "type": "builtin",
+      "executor": "system-info",
+      "description": "Details about the machine itself: operating system, release, CPU architecture, Python version, hardware specs."
+    },
+    {
+      "id": "healthcheck",
+      "type": "noop",
+      "executor": "-",
+      "description": "Liveness check. Also the fallback for any query that does not match another task: greetings, chit-chat, ambiguous or empty input."
+    }
+  ]
+}

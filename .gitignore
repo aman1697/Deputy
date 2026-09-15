@@ -1,0 +1,59 @@
+# ---------------------------------------------------------------- secrets ---
+# .env holds HF_TOKEN. Never commit it; commit .env.example instead.
+.env
+.env.*
+!.env.example
+
+# ------------------------------------------------------------------ python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# packaging / build artifacts
+build/
+dist/
+sdist/
+*.egg-info/
+*.egg
+.eggs/
+
+# ------------------------------------------------------------------- tests ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# --------------------------------------------------------------- virtualenv ---
+.venv/
+venv/
+env/
+ENV/
+
+# ------------------------------------------------------------------ editors ---
+.idea/
+.vscode/
+*.swp
+*~
+
+# Machine-specific Claude Code settings. .claude/settings.json is shareable
+# and stays tracked; the .local variant is per-developer.
+.claude/settings.local.json
+
+# ----------------------------------------------------------------------- os ---
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# ------------------------------------------------------------------- output ---
+# Scratch space for task output and logs, if you add any.
+*.log
+logs/
+tmp/
