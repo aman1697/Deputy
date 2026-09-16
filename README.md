@@ -1,18 +1,24 @@
 # Task Router Agent
 
 Takes a natural-language query, asks a model which registered task it means,
-runs that task locally, and returns its output.
+runs that task locally, says the result back in plain English, and speaks it.
 
 ```
 POST /active_window  {"content": "what app am i working on?"}
 
   PromptIngestor    build a routing prompt from the task catalog
-  ModelGate         ask the model  ->  {"task_id":"get-active-app","args":[]}
+  ModelGate.route   ask the model  ->  {"task_id":"get-active-app","args":[]}
   Consumer          decode the reply
   TaskValidator     resolve task_id against the registry
   TaskRunner        run the script, capture stdout
 
-{"ok": true, "task_id": "get-active-app", "output": "Visual Studio Code", ...}
+  PromptIngestor    build a speech prompt from the execution envelope
+  ModelGate.speak   rephrase the raw result as one spoken line
+  ModelGate.synth.  render that line to a .wav in src/audio/
+
+{"ok": true, "task_id": "get-active-app", "output": "{\"app\":\"Code.exe\"}",
+ "spoken_text": "You're working in Visual Studio Code.",
+ "audio_path": "src/audio/20260916-184259-a1b2c3d4e5f6.wav", ...}
 ```
 
 ## Running
@@ -22,9 +28,13 @@ pip install -r requirements.txt
 python serve.py            # http://localhost:5000
 ```
 
-`.env` needs `MODEL_NAME` and `HF_TOKEN`. Optional: `ROLE`, `TEMPERATURE`,
-`MAX_TOKENS`, `REQUEST_TIMEOUT`, `MAX_RETRIES`, `HOST`, `PORT` (see
+`.env` needs `MODEL_NAME`, `AUDIO_MODEL_NAME`, and `HF_TOKEN`. Optional:
+`ROLE`, `TEMPERATURE`, `MAX_TOKENS`, `SPEECH_TEMPERATURE`, `SPEECH_MAX_TOKENS`,
+`AUDIO_ENABLED`, `REQUEST_TIMEOUT`, `MAX_RETRIES`, `HOST`, `PORT` (see
 `src/config.py`).
+
+Synthesis needs a CUDA GPU and the TTS weights. On a machine without one, set
+`AUDIO_ENABLED=false`: the reply still carries `spoken_text`, just no file.
 
 It binds `127.0.0.1` by default. The service runs local scripts on this
 machine, so set `HOST=0.0.0.0` only if you actually want that reachable from
@@ -112,10 +122,33 @@ can be diagnosed afterwards.
 `spawn_failed`, and `powershell_not_available` are transient; `validation_failed`,
 `script_not_found`, and `task_failed` will fail identically forever.
 
+**Speech is presentation, not the answer.** By the time the rephrase runs, the
+task has already executed. A failed rephrase falls back to `SPEECH_FALLBACK`
+and a failed synthesis returns `audio_path: null` — neither discards a result
+the caller can still use, so neither turns a working task into a 5xx.
+
+**Task stdout is data to read aloud, never instructions.** The speech prompt
+says so explicitly, and `ingest_speech` substitutes the query and the output
+last, so a `{{TOKEN}}` appearing in either stays literal. Output is capped at
+`MAX_SPOKEN_INPUT_CHARS` before it reaches the model.
+
+**`request_id` is generated server-side.** It has to exist even when routing
+fails, it must be unique per request, and it names the audio file — so it is
+minted in `serve.py` and passed to `Consumer.consume`, which ignores any id the
+model put in its reply. `audio_output_path` strips anything path-shaped from it
+regardless.
+
+**The TTS model loads on first use.** `ModelHelpers.audio_model` caches it, and
+`qwen_tts`/`soundfile` are imported inside the functions that need them, so the
+router runs on a machine with no GPU and no TTS stack installed.
+
 ## Tests
 
 ```
 python -m pytest tests -q
 ```
 
-PowerShell-dependent tests skip automatically where no shell is present.
+PowerShell-dependent tests skip automatically where no shell is present. No
+test makes a live inference call or loads the TTS model: `tests/conftest.py`
+sets `AUDIO_ENABLED=false`, and the speech tests stub the model and the
+synthesiser.

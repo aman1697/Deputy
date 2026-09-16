@@ -2,6 +2,7 @@
 __pycache__/
 *.py[codz]
 *$py.class
+.claude/
 
 # C extensions
 *.so
@@ -249,3 +250,6 @@ $RECYCLE.BIN/
 # Scratch space for script output and logs, if you add any.
 logs/
 tmp/
+
+# Synthesised speech. Generated per request; nothing here is source.
+src/audio/

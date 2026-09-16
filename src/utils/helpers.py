@@ -1,7 +1,17 @@
 import json
 import logging
+import re
+import uuid
+from datetime import datetime
+
+from src.utils.constants import AUDIO_DIR, AUDIO_FORMAT
 
 _LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# request_id reaches us from the model's reply, so it cannot be trusted in a
+# path. Anything outside this set is stripped rather than rejected.
+_UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9_-]")
+_MAX_ID_CHARS = 40
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -15,6 +25,23 @@ def get_logger(name: str) -> logging.Logger:
         # logger as well (uvicorn installs one) would print every line twice.
         logger.propagate = False
     return logger
+
+
+def audio_output_path(request_id=None):
+    """Return a fresh path under AUDIO_DIR for one request's speech.
+
+    Timestamp first so the directory sorts chronologically, request_id second so
+    a file traces back to the call that made it. Two requests in the same second
+    with no request_id still get distinct names.
+    """
+    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    suffix = _UNSAFE_NAME_CHARS.sub("", str(request_id or ""))[:_MAX_ID_CHARS]
+    if not suffix:
+        suffix = uuid.uuid4().hex[:8]
+
+    return AUDIO_DIR / f"{stamp}-{suffix}.{AUDIO_FORMAT}"
 
 
 def _find_object_end(text, start):

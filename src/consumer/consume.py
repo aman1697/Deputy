@@ -25,15 +25,19 @@ class Consumer:
     # Entry point
     # ----------------------------------------------------------------------
 
-    def consume(self, message):
+    def consume(self, message, request_id=None):
         received_at = time.monotonic()
 
         payload, decode_error = self._decode(message)
         if decode_error is not None:
             logger.warning("rejecting message: %s", decode_error)
-            return self._reply(None, False, error=decode_error, received_at=received_at)
+            return self._reply(
+                request_id, False, error=decode_error, received_at=received_at
+            )
 
-        request_id = payload.get("request_id")
+        # The caller's id wins: it is generated server-side and ties the envelope
+        # to one request, whereas anything in the payload came from the model.
+        request_id = request_id or payload.get("request_id")
         task_id, task_type = self.validator.normalize(payload)
 
         entry = self.validator.resolve(payload)

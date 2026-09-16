@@ -19,6 +19,7 @@ class ModelGate:
 
     def __init__(self, model_name: str = None, model_helpers: ModelHelpers = None):
         self.model_name = model_name or settings.model_name
+        self.audio_model_name = settings.audio_model_name
         self.helpers = model_helpers or helpers
 
     def route(self, content: str) -> str:
@@ -31,3 +32,27 @@ class ModelGate:
         reply = self.helpers.chat(content)
         logger.debug("model reply: %s", reply)
         return reply
+
+    def speak(self, content: str) -> str:
+        """Turn a task result into one spoken line and return it.
+
+        Same model as routing, different sampling: reading a result aloud is a
+        rewrite, not a classification, so it uses the speech settings.
+        """
+        logger.info("requesting speech from %s (%d chars)", self.model_name, len(content or ""))
+        reply = self.helpers.chat(
+            content,
+            temperature=settings.speech_temperature,
+            max_tokens=settings.speech_max_tokens,
+        )
+        logger.debug("spoken reply: %s", reply)
+        return reply.strip()
+
+    def synthesize(self, text: str, output_path) -> str:
+        """Render spoken text to a file on disk and return its path.
+
+        The model loads on the first call, so a deployment that never asks for
+        audio never pays for it.
+        """
+        logger.info("synthesising %d chars with %s", len(text or ""), self.audio_model_name)
+        return self.helpers.generate_audio(self.helpers.audio_model(), text, output_path)

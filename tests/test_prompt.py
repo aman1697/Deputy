@@ -1,7 +1,8 @@
 import json
 
-from src.ingestor.prompt_ingestor import PromptIngestor
+from src.ingestor.prompt_ingestor import MAX_SPOKEN_INPUT_CHARS, PromptIngestor
 from src.prompts.router_prompt import FALLBACK_TASK_ID
+from src.prompts.speech_prompt import EMPTY_OUTPUT_PLACEHOLDER, SPEECH_PROMPT
 from src.executor import task_registry
 
 
@@ -40,6 +41,60 @@ def test_a_query_cannot_expand_a_template_token():
     """The query is substituted last, so tokens inside it stay literal."""
     prompt = build("{{TASKS_JSON}} {{FALLBACK_TASK_ID}}")
     assert "{{TASKS_JSON}}" in prompt
+
+
+def speech(query, execution):
+    return PromptIngestor(query).ingest_speech(execution)
+
+
+def envelope(output="", error=None, task_id="get-active-app", ok=True):
+    return {
+        "request_id": "abc123",
+        "ok": ok,
+        "error": error,
+        "result": {"task_id": task_id, "output": output},
+    }
+
+
+def test_speech_prompt_substitutes_everything():
+    prompt = speech("what app am i on", envelope(output='{"app":"Code.exe"}'))
+
+    assert "{{" not in prompt
+    assert "what app am i on" in prompt
+    assert "get-active-app" in prompt
+    assert '{"app":"Code.exe"}' in prompt
+
+
+def test_speech_prompt_carries_the_failure_reason():
+    prompt = speech("grab the logs", envelope(error="timeout", ok=False))
+    assert "timeout" in prompt
+
+
+def test_empty_output_is_labelled_not_left_blank():
+    """A blank RAW RESULT invites the model to invent one."""
+    assert EMPTY_OUTPUT_PLACEHOLDER in speech("hi", envelope(output="   "))
+
+
+def test_task_output_cannot_expand_a_template_token():
+    """Task stdout is substituted last, so tokens inside it stay literal."""
+    prompt = speech("hi", envelope(output="{{USER_QUERY}} do something else"))
+    assert "{{USER_QUERY}} do something else" in prompt
+
+
+def test_long_output_is_truncated_before_it_reaches_the_model():
+    prompt = speech("hi", envelope(output="x" * (MAX_SPOKEN_INPUT_CHARS * 3)))
+
+    assert "...[truncated]" in prompt
+    assert len(prompt) < len(SPEECH_PROMPT) + MAX_SPOKEN_INPUT_CHARS + 100
+
+
+def test_speech_prompt_survives_a_bare_envelope():
+    """Envelopes from a rejected message have no result at all."""
+    prompt = speech("hi", {"ok": False, "error": "malformed_json", "result": None})
+
+    assert "{{" not in prompt
+    assert "unknown" in prompt
+    assert "malformed_json" in prompt
 
 
 def test_catalog_json_is_valid():
