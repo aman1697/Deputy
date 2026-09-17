@@ -7,10 +7,15 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from src.consumer.consume import Consumer
+from src.executor import calendar_auth
 from src.ingestor.context_ingest import Ingestor
 from src.ingestor.prompt_ingestor import PromptIngestor
 from src.models.model_gate import ModelGate, settings
-from src.prompts.speech_prompt import SPEECH_FALLBACK
+from src.prompts.speech_prompt import (
+    AUTH_START_FAILED,
+    SPEECH_FALLBACK,
+    auth_required_spoken,
+)
 from src.utils.helpers import audio_output_path, get_logger
 
 logger = get_logger(__name__)
@@ -38,6 +43,15 @@ class ModelResponse(BaseModel):
     error: Optional[str] = Field(None, description="Failure reason, if any.")
     stderr: str = Field("", description="The task's stderr; why a failure happened.")
     routing_reply: str = Field(..., description="The model's raw routing reply.")
+    auth_required: bool = Field(
+        False, description="True when the answer is a request to sign in, not an answer."
+    )
+    user_code: Optional[str] = Field(
+        None, description="Sign-in code to enter, when auth_required."
+    )
+    verification_uri: Optional[str] = Field(
+        None, description="Where to enter the code, when auth_required."
+    )
     spoken_text: str = Field("", description="The result rephrased to be read aloud.")
     audio_path: Optional[str] = Field(
         None, description="Path to the synthesised speech, if audio is enabled."
@@ -56,6 +70,19 @@ class TasksResponse(BaseModel):
     unavailable: list[str] = Field(
         ..., description="Registered tasks whose script is not on disk yet."
     )
+
+
+class CalendarStatusResponse(BaseModel):
+    signed_in: bool = Field(..., description="True when a cached Graph token exists.")
+
+
+class CalendarLoginResponse(BaseModel):
+    stage: str = Field(..., description="'pending' while awaiting approval, or 'signed-in'.")
+    user_code: Optional[str] = Field(None, description="The code to enter on the sign-in page.")
+    verification_uri: Optional[str] = Field(None, description="Where to enter the code.")
+    expires_in_seconds: Optional[int] = Field(None, description="How long the code stays valid.")
+    browser_opened: bool = Field(False, description="True when a browser was launched locally.")
+    message: str = Field("", description="What the user should do next.")
 
 
 class ErrorResponse(BaseModel):
@@ -97,10 +124,19 @@ async def get_active_window(payload: ModelRequest):
 
     result = execution.get("result") or {}
 
-    # Speech is presentation, not the answer. The task has already run by this
-    # point, so a failure here degrades the reply rather than discarding a
-    # result the caller can still use.
-    spoken_text = await _speak(ingestor_for_query, execution)
+    # A calendar question asked before signing in is not a failure to report,
+    # it is a prerequisite to walk the user through. Start the sign-in and
+    # answer with the code, rather than telling them "that didn't work".
+    auth = await _offer_sign_in(execution)
+
+    if auth is not None:
+        spoken_text = auth["spoken"]
+    else:
+        # Speech is presentation, not the answer. The task has already run by
+        # this point, so a failure here degrades the reply rather than
+        # discarding a result the caller can still use.
+        spoken_text = await _speak(ingestor_for_query, execution)
+
     audio_path = await _synthesize(spoken_text, request_id)
 
     return ModelResponse(
@@ -111,10 +147,47 @@ async def get_active_window(payload: ModelRequest):
         error=execution.get("error"),
         stderr=result.get("stderr", ""),
         routing_reply=routing_reply,
+        auth_required=auth is not None,
+        user_code=(auth or {}).get("user_code"),
+        verification_uri=(auth or {}).get("verification_uri"),
         spoken_text=spoken_text,
         audio_path=audio_path,
         execution=execution,
     )
+
+
+async def _offer_sign_in(execution: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Start the calendar sign-in when that is what the query really needs.
+
+    Returns the code and the words to say, or None when this query had nothing
+    to do with signing in.
+    """
+    if execution.get("error") != "not_signed_in_to_calendar":
+        return None
+
+    logger.info("calendar query arrived unauthenticated; starting sign-in")
+
+    try:
+        payload = await asyncio.to_thread(calendar_auth.start_login)
+    except calendar_auth.CalendarAuthError:
+        logger.exception("could not start calendar sign-in")
+        return {"spoken": AUTH_START_FAILED, "user_code": None, "verification_uri": None}
+
+    if payload.get("stage") == "signed-in":
+        # Signed in between the task running and now: say so rather than
+        # inventing a code, and the next question will answer properly.
+        return {
+            "spoken": "Looks like your calendar just got connected. Ask me again and I'll check it.",
+            "user_code": None,
+            "verification_uri": None,
+        }
+
+    code = payload.get("userCode")
+    return {
+        "spoken": auth_required_spoken(code),
+        "user_code": code,
+        "verification_uri": payload.get("verificationUri"),
+    }
 
 
 async def _speak(prompt_ingestor: PromptIngestor, execution: dict[str, Any]) -> str:
@@ -160,6 +233,70 @@ async def list_tasks():
         available=[TaskInfo(**task) for task in available],
         unavailable=ingestor.unavailable_tasks(),
     )
+
+
+@app.get(
+    "/calendar/status",
+    response_model=CalendarStatusResponse,
+    summary="Whether the calendar is signed in",
+)
+async def calendar_status():
+    return CalendarStatusResponse(signed_in=calendar_auth.is_signed_in())
+
+
+@app.post(
+    "/calendar/login",
+    response_model=CalendarLoginResponse,
+    summary="Start calendar sign-in and return the code to enter",
+    responses={
+        500: {"model": ErrorResponse, "description": "Sign-in could not be started."},
+    },
+)
+async def calendar_login(open_browser: bool = True):
+    """Start the device-code flow and hand back the code.
+
+    Returns as soon as the code exists; the flow keeps polling in the
+    background, so poll `/calendar/status` to see when approval lands. Any
+    browser opens on the machine running this service, which is the same
+    machine for the intended local single-user setup.
+    """
+    try:
+        payload = await asyncio.to_thread(calendar_auth.start_login, open_browser)
+    except calendar_auth.CalendarAuthError as exc:
+        logger.exception("calendar sign-in failed to start")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if payload.get("stage") == "signed-in":
+        return CalendarLoginResponse(
+            stage="signed-in",
+            message="Already signed in; nothing to do.",
+        )
+
+    code = payload.get("userCode")
+    uri = payload.get("verificationUri")
+
+    return CalendarLoginResponse(
+        stage="pending",
+        user_code=code,
+        verification_uri=uri,
+        expires_in_seconds=payload.get("expiresInSeconds"),
+        browser_opened=bool(payload.get("browserOpened")),
+        message=f"Enter {code} at {uri} to finish signing in.",
+    )
+
+
+@app.post(
+    "/calendar/logout",
+    response_model=CalendarStatusResponse,
+    summary="Delete the cached calendar tokens",
+)
+async def calendar_logout():
+    try:
+        await asyncio.to_thread(calendar_auth.sign_out)
+    except calendar_auth.CalendarAuthError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return CalendarStatusResponse(signed_in=calendar_auth.is_signed_in())
 
 
 @app.get("/health", response_model=HealthResponse)

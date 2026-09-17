@@ -138,9 +138,15 @@ class TaskRunner:
             stderr=completed.stderr,
             # A non-zero exit needs a stated reason. Without one the caller gets
             # ok=false with error=null and has to dig through stderr to guess.
-            error=None if ok else f"task_failed: exit {completed.returncode}",
+            error=None if ok else self._exit_error(entry, completed.returncode),
             started=started,
         )
+
+    @staticmethod
+    def _exit_error(entry, exit_code):
+        """A named reason when the registry declares one, else the raw exit."""
+        named = entry.get("errors_by_exit", {}).get(exit_code)
+        return named or f"task_failed: exit {exit_code}"
 
     # ----------------------------------------------------------------------
     # Handlers, one per task type

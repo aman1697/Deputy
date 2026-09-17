@@ -147,3 +147,98 @@ def test_powershell_task_honours_allowlisted_format_arg():
     assert result["ok"], result
     payload = json.loads(result["output"])
     assert {"timestamp", "app", "pid", "idleSeconds", "title"} <= set(payload)
+
+
+# ------------------------------------------------------------------ calendar --
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["-Window", "next3h"],
+        ["-Window", "today"],
+        ["-Window", "next24h"],
+        ["-Window", "week"],
+    ],
+)
+def test_calendar_window_args_pass(args):
+    assert TaskRunner._extract_args({"args": args}, get_entry("get-calendar")) == args
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["-Window", "nextyear"],        # not a defined window
+        ["-Window", "NEXT3H"],          # allowlist is case-sensitive
+        ["-MaxEvents", "999"],          # takes a free-form value
+        ["-IncludeAttendees"],          # would send colleague names off-machine
+        ["-IncludeCancelled"],          # would let a dead meeting be announced
+        ["-Format", "text"],            # not advertised; the model gets JSON
+    ],
+)
+def test_calendar_args_outside_the_allowlist_are_refused(args):
+    assert TaskRunner._extract_args({"args": args}, get_entry("get-calendar")) is None
+
+
+# Graph is unreachable without a cached token (exit 4) and can fail on network
+# or API errors (1, 2). None of those are assertable in a unit test run.
+CALENDAR_UNAVAILABLE_EXITS = (1, 2, 4)
+
+
+def _calendar_payload_or_skip(args):
+    import json
+
+    result = runner.executor({"task_id": "get-calendar", "args": args})
+
+    if result["exit_code"] in CALENDAR_UNAVAILABLE_EXITS:
+        pytest.skip(f"calendar unavailable here: {result['stderr'].strip()[:120]}")
+
+    assert result["ok"], result
+    return json.loads(result["output"])
+
+
+@needs_powershell
+def test_calendar_task_returns_a_usable_payload():
+    """Needs a signed-in Graph token; skipped where there isn't one."""
+    payload = _calendar_payload_or_skip(["-Window", "week"])
+
+    assert {
+        "generatedAt",
+        "dataSource",
+        "window",
+        "windowEnd",
+        "eventCount",
+        "cancelledCount",
+        "truncated",
+        "events",
+    } <= set(payload)
+    assert payload["window"] == "week"
+    assert payload["dataSource"] == "microsoft-graph"
+    assert isinstance(payload["events"], list)
+    assert payload["eventCount"] == len(payload["events"])
+
+
+@needs_powershell
+def test_calendar_events_carry_a_relative_time_and_no_private_fields():
+    """The model is told never to do time arithmetic, so the script must supply it."""
+    payload = _calendar_payload_or_skip(["-Window", "week"])
+
+    if not payload["events"]:
+        pytest.skip("no events on the calendar this week to assert against")
+
+    event = payload["events"][0]
+
+    assert isinstance(event["startsInMinutes"], int)
+    assert {"subject", "start", "end", "durationMinutes", "attendeeCount"} <= set(event)
+    # Minimal shape by default: a count, never the names, and never the body.
+    assert "attendees" not in event
+    assert "body" not in event
+
+
+@needs_powershell
+def test_cancelled_meetings_are_excluded_from_the_event_list():
+    """A cancelled meeting announced as upcoming is the worst failure mode here."""
+    payload = _calendar_payload_or_skip(["-Window", "week"])
+
+    assert all(event["cancelled"] is False for event in payload["events"])
+    assert isinstance(payload["cancelledCount"], int)

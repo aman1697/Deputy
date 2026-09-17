@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 # Single source of truth for on-disk locations. Everything else imports these
@@ -19,3 +20,14 @@ CUDA_CONFIG = {
 AUDIO_DIR = ROOT / "audio"
 AUDIO_FORMAT = "wav"
 AUDIO_LANGUAGE = "English"
+
+# Graph tokens live outside the repo, under the user's profile: they are
+# per-user credentials, not project files, and must never land in a working
+# tree someone might commit. get-calendar.ps1 writes this path; both sides
+# have to agree on it.
+_LOCAL_APPDATA = os.environ.get("LOCALAPPDATA")
+GRAPH_TOKEN_FILE = (
+    Path(_LOCAL_APPDATA) / "Deputy" / "graph-token.xml"
+    if _LOCAL_APPDATA
+    else Path.home() / ".deputy" / "graph-token.xml"
+)

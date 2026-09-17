@@ -27,6 +27,17 @@ def get_logger(name: str) -> logging.Logger:
     return logger
 
 
+def spell_out(code):
+    """Space a short code out so it survives being read aloud.
+
+    "FH4LR5QJH" spoken as a word is unusable; the listener needs the characters
+    one at a time. Hyphens make a TTS voice pause between them.
+    """
+    if not code:
+        return ""
+    return "-".join(str(code).strip().upper())
+
+
 def audio_output_path(request_id=None):
     """Return a fresh path under AUDIO_DIR for one request's speech.
 

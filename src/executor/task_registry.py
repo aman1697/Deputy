@@ -23,6 +23,22 @@ def _clean_string_list(raw):
     )
 
 
+def _clean_error_map(raw):
+    """Normalize {"4": "not_signed_in"} into {4: "not_signed_in"}."""
+    if not isinstance(raw, dict):
+        return {}
+
+    mapping = {}
+    for code, name in raw.items():
+        if not isinstance(name, str) or not name.strip():
+            continue
+        try:
+            mapping[int(code)] = name.strip()
+        except (TypeError, ValueError):
+            continue
+    return mapping
+
+
 def _build_entry(task_id, executor, task_type, task):
     return {
         "id": task_id,
@@ -34,6 +50,10 @@ def _build_entry(task_id, executor, task_type, task):
         # difference between "this task takes flags" and "this task takes
         # arbitrary attacker-chosen flags".
         "args_allowlist": _clean_string_list(task.get("args_allowlist")),
+        # A script can distinguish its failure modes by exit code; this turns
+        # them into names a caller can act on, rather than "exit 4". Declared in
+        # the registry so adding one stays a tasks.json edit.
+        "errors_by_exit": _clean_error_map(task.get("errors")),
     }
 
 

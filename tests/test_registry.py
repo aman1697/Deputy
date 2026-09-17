@@ -43,3 +43,22 @@ def test_resolve_script_refuses_traversal():
 
 def test_comment_key_is_not_parsed_as_a_task():
     assert "_comment" not in task_registry.load()
+
+
+def test_calendar_task_is_registered_and_runnable():
+    entry = task_registry.get_entry("get-calendar")
+
+    assert entry["type"] == "powershell"
+    assert task_registry.is_available(entry)
+    assert "get-calendar" in {t["task_id"] for t in task_registry.catalog(available_only=True)}
+
+
+def test_calendar_allowlist_covers_every_window_and_nothing_else():
+    """The router can choose a window; it cannot reach the other parameters."""
+    allowed = set(task_registry.get_entry("get-calendar")["args_allowlist"])
+
+    assert allowed == {"-Window", "next3h", "today", "next24h", "week"}
+    # Deliberately absent: -IncludeAttendees would ship colleague names to the
+    # inference provider, and -MaxEvents takes a free-form value.
+    assert "-IncludeAttendees" not in allowed
+    assert "-MaxEvents" not in allowed

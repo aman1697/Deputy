@@ -46,6 +46,64 @@ the network — and put authentication in front of it first.
 | `GET /tasks` | What the agent can currently do |
 | `GET /health` | Liveness |
 
+## Calendar access
+
+`get-calendar` answers questions about meetings and calls — "do I have a call in
+the next three hours", "what's my next meeting", "am I free right now".
+
+Teams' calendar *is* the Exchange calendar, and the script reads it from
+**Microsoft Graph** — Exchange Online's authoritative state.
+
+Sign in once; after that the refresh token is used silently:
+
+```
+powershell -NoProfile -File src/scripts/get-calendar.ps1 -Login
+```
+
+That runs the OAuth device-code flow against the documented "Microsoft Graph
+Command Line Tools" public client, so **no Azure app registration is needed**.
+Tokens are cached under `%LOCALAPPDATA%\Deputy`, encrypted with DPAPI so only
+the signing-in Windows user on that machine can read them. `-Logout` deletes
+them. To use your own app registration instead, set `DEPUTY_GRAPH_CLIENT_ID`
+and `DEPUTY_GRAPH_TENANT`.
+
+Those two must be real environment variables, not `.env` entries: the script
+runs as a subprocess and inherits the OS environment, while `.env` is only read
+into `Setting` inside the Python process.
+
+### Why not Outlook COM
+
+The first version of this script used Outlook COM, which needed no auth at all.
+It was abandoned because it is **silently wrong**. COM cold-starts a headless
+Outlook and reads its local `.ost` cache, which is only as fresh as the last
+time Outlook actually ran and finished syncing. On a machine where classic
+Outlook is installed but unused, that cache had not been updated in six months:
+it missed a meeting created that day and reported a cancelled meeting as live.
+A calendar assistant that is confidently wrong is worse than one that fails, and
+COM gives no reliable way to know how stale the cache is. Graph has no cache.
+
+### Deliberate choices
+
+- **Cancelled meetings are excluded**, and only counted. Graph states
+  `isCancelled` outright, so this is now a fact rather than the
+  `MeetingStatus`-guessing the COM version needed.
+- **Teams detection is authoritative** — `isOnlineMeeting` plus
+  `onlineMeetingProvider == teamsForBusiness`, not a regex on the location text.
+- **Every event carries `startsInMinutes`.** The model is told never to do time
+  arithmetic — it has no reliable idea what time it is — so the script computes
+  the relative figure and the model only reads it out.
+- **Recurring series are expanded server-side** by `calendarView`, so there is
+  no recurrence handling in the script.
+
+What it sends to the model is deliberately minimal: subject, times, organizer,
+a Teams flag, and an attendee *count*. Event bodies, join URLs, and attendee
+names are left out, because task output goes to a third-party inference
+provider. `-IncludeAttendees` opts back in locally, and is deliberately absent
+from `args_allowlist` so the router can never choose it.
+
+Exit codes: `1` Graph request failed, `2` unreadable response, `4` not signed in
+(run `-Login`). All surface as a normal `ok: false` rather than a crash.
+
 ## Adding a task
 
 Two steps, no code changes.

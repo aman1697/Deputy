@@ -13,6 +13,9 @@
     "args_allowlist - every supplied arg must appear here verbatim. Only list",
     "                 flags that are safe in any combination; anything taking",
     "                 a free-form value cannot be allowlisted this way.",
+    "errors         - optional {exit_code: name}. Turns a script's exit code",
+    "                 into a named reason the caller can act on, instead of",
+    "                 the default 'task_failed: exit N'.",
     "",
     "Script-backed tasks whose file is missing are hidden from the router until",
     "the script exists, so an entry can be added before it is implemented."
@@ -25,6 +28,19 @@
       "description": "The application or window the user is focused on right now: what they are currently working on, what is in the foreground, what is open on screen. Returns the app name by default; pass -Format json for the window title, process id and idle seconds as well.",
       "allow_args": true,
       "args_allowlist": ["-Format", "name", "json", "line", "title"]
+    },
+    {
+      "id": "get-calendar",
+      "type": "powershell",
+      "executor": "get-calendar.ps1",
+      "description": "The user's Microsoft Teams and Outlook calendar: meetings, calls, and appointments that are scheduled or coming up. Use for anything about their schedule - whether they have a call soon, what their next meeting is, what is on today or this week, whether they are free, who organized a meeting, or whether a call is happening right now. Returns each upcoming event with its start time and how many minutes away it is. Pass -Window with next3h for the next few hours, today for the rest of today, next24h for the next day, or week for the next seven days.",
+      "allow_args": true,
+      "args_allowlist": ["-Window", "next3h", "today", "next24h", "week"],
+      "errors": {
+        "1": "calendar_service_unreachable",
+        "2": "calendar_response_unreadable",
+        "4": "not_signed_in_to_calendar"
+      }
     },
     {
       "id": "collect-logs",
