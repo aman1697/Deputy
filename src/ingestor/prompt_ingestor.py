@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from src.ingestor.context_ingest import Ingestor
+from src.prompts.app_prompt import PACKAGE_ID_PROMPT, RESOLVE_APP_PROMPT
 from src.prompts.router_prompt import FALLBACK_TASK_ID, ROUTER_PROMPT
 from src.prompts.speech_prompt import EMPTY_OUTPUT_PLACEHOLDER, SPEECH_PROMPT
 
@@ -58,3 +59,24 @@ class PromptIngestor:
             )
         except Exception as e:
             raise RuntimeError(f"Error ingesting speech prompt: {e}") from e
+
+    @staticmethod
+    def ingest_app_match(requested: str, inventory) -> str:
+        """Prompt for matching a spoken app name to something actually installed."""
+        try:
+            listing = "\n".join(f"- {name}" for name in inventory)
+            # Requested last, so an inventory entry cannot be spoofed by a name
+            # that happens to contain a token.
+            return RESOLVE_APP_PROMPT.replace("{{INVENTORY}}", listing).replace(
+                "{{REQUESTED}}", str(requested)
+            )
+        except Exception as e:
+            raise RuntimeError(f"Error ingesting app match prompt: {e}") from e
+
+    @staticmethod
+    def ingest_package_id(requested: str) -> str:
+        """Prompt for the winget identifier of an application."""
+        try:
+            return PACKAGE_ID_PROMPT.replace("{{REQUESTED}}", str(requested))
+        except Exception as e:
+            raise RuntimeError(f"Error ingesting package id prompt: {e}") from e

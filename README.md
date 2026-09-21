@@ -33,8 +33,39 @@ python serve.py            # http://localhost:5000
 `AUDIO_ENABLED`, `REQUEST_TIMEOUT`, `MAX_RETRIES`, `HOST`, `PORT` (see
 `src/config.py`).
 
-Synthesis needs a CUDA GPU and the TTS weights. On a machine without one, set
-`AUDIO_ENABLED=false`: the reply still carries `spoken_text`, just no file.
+Synthesis needs a CUDA GPU and the TTS weights, so `AUDIO_ENABLED` is **off by
+default**. The reply still carries `spoken_text`; only the `.wav` is skipped.
+Set `AUDIO_ENABLED=true` once a GPU is available.
+
+## Running the model locally
+
+Set `MODEL_BASE_URL` to any OpenAI-compatible endpoint and Hugging Face is
+bypassed: no token, no quota, and task output stops leaving the machine — which
+matters, because that output includes your calendar.
+
+```
+ollama pull qwen2.5:3b-instruct
+```
+
+```
+MODEL_BASE_URL=http://127.0.0.1:11434/v1
+MODEL_ID=qwen2.5:3b-instruct
+```
+
+Two things to know:
+
+- **The colon is part of an Ollama model name**, not a provider suffix.
+  `model_repo` only splits on `:` when `MODEL_BASE_URL` is unset, otherwise
+  `qwen2.5:3b-instruct` would be read as model `qwen2.5` from provider
+  `3b-instruct`.
+- **CPU inference is slow.** On four cores, budget ~8s to route and ~6s to
+  phrase the reply, so ~14s per question. `OLLAMA_KEEP_ALIVE=60m` avoids paying
+  a ~15s model load on the first question after an idle spell. `OLLAMA_MODELS`
+  moves the model store off the system drive.
+
+A smaller model also holds the prompts to a higher standard: a 3B will copy
+details out of a prompt's examples if you let it, which is why the speech
+prompt says in as many words that the examples are tone only.
 
 It binds `127.0.0.1` by default. The service runs local scripts on this
 machine, so set `HOST=0.0.0.0` only if you actually want that reachable from

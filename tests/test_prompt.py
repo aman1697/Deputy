@@ -61,8 +61,22 @@ def test_speech_prompt_substitutes_everything():
 
     assert "{{" not in prompt
     assert "what app am i on" in prompt
-    assert "get-active-app" in prompt
     assert '{"app":"Code.exe"}' in prompt
+    # The task id is deliberately absent: the model is told never to mention
+    # the machinery, so including it is noise that also costs prompt tokens.
+    assert "get-active-app" not in prompt
+
+
+def test_the_real_result_comes_after_the_examples():
+    """Recency decides what a small model copies.
+
+    With the examples last, a 3B narrated an example's calendar failure in
+    answer to "what app am i on". The live data has to sit closest to the
+    point of generation.
+    """
+    prompt = speech("what app am i on", envelope(output='{"app":"Code.exe"}'))
+
+    assert prompt.index("END OF EXAMPLES") < prompt.index('{"app":"Code.exe"}')
 
 
 def test_speech_prompt_carries_the_failure_reason():
@@ -93,8 +107,8 @@ def test_speech_prompt_survives_a_bare_envelope():
     prompt = speech("hi", {"ok": False, "error": "malformed_json", "result": None})
 
     assert "{{" not in prompt
-    assert "unknown" in prompt
     assert "malformed_json" in prompt
+    assert EMPTY_OUTPUT_PLACEHOLDER in prompt
 
 
 def test_catalog_json_is_valid():

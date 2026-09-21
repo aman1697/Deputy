@@ -7,7 +7,18 @@ class Setting(BaseSettings):
 
     model_name: str = Field(validation_alias=AliasChoices("MODEL_NAME", "MODEL_ID"))
     audio_model_name: str = Field(validation_alias=AliasChoices("AUDIO_MODEL_NAME", "AUDIO_MODEL_ID"))
-    hf_token: str
+
+    # Point at any OpenAI-compatible endpoint - Ollama on localhost, Groq, or
+    # anything else - and Hugging Face is bypassed entirely. Unset means use
+    # Hugging Face inference providers as before.
+    model_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MODEL_BASE_URL", "OPENAI_BASE_URL"),
+    )
+
+    # Not required when model_base_url points somewhere that needs no key, such
+    # as a local Ollama. The client checks for it only on the Hugging Face path.
+    hf_token: str = ""
     role: str = "user"
 
     # Routing is a classification, not a creative task: a fixed temperature
@@ -22,9 +33,11 @@ class Setting(BaseSettings):
     speech_temperature: float = 0.4
     speech_max_tokens: int = 512
 
-    # Synthesis needs a GPU and the TTS weights. Off by default is wrong for the
-    # intended deployment, but this lets a dev box return spoken text without one.
-    audio_enabled: bool = True
+    # Synthesis needs a CUDA GPU plus flash-attn, which the current machine does
+    # not have, so it is off until someone turns it on. The spoken *text* is
+    # produced either way; this only controls whether a .wav is rendered.
+    # Set AUDIO_ENABLED=true once the GPU side is available.
+    audio_enabled: bool = False
 
     # Without a timeout a stalled inference call holds the request open
     # indefinitely and ties up a worker thread.
@@ -47,13 +60,21 @@ class Setting(BaseSettings):
     # e.g. Qwen/Qwen3.8-27B:novita. huggingface_hub rejects that colon inside
     # `model=` — the provider is a separate argument to InferenceClient — so it
     # is split here rather than at each call site.
+    #
+    # That split must not happen for a custom endpoint: an Ollama model is named
+    # "qwen2.5:7b-instruct", where the colon is part of the name. Splitting it
+    # would ask for a model "qwen2.5" from a provider "7b-instruct".
 
     @property
     def model_repo(self) -> str:
-        """The model id with any provider suffix removed."""
+        """The model id as the configured endpoint expects it."""
+        if self.model_base_url:
+            return self.model_name
         return self.model_name.partition(":")[0]
 
     @property
     def model_provider(self) -> str | None:
-        """The provider named in MODEL_ID, or None to let the hub choose."""
+        """The provider named in MODEL_ID, or None when there isn't one."""
+        if self.model_base_url:
+            return None
         return self.model_name.partition(":")[2] or None

@@ -92,13 +92,35 @@ class TaskRunner:
         if any("\x00" in a for a in raw):
             return None
 
-        allowlist = entry["args_allowlist"]
-        if allowlist and any(a not in allowlist for a in raw):
-            # The model chooses these. An allowlist keeps a hallucinated or
-            # injected flag from reaching the script at all.
+        if not TaskRunner._args_permitted(raw, entry):
             return None
 
         return list(raw)
+
+    @staticmethod
+    def _args_permitted(args, entry):
+        """Every arg must be allowlisted verbatim, or match the task's pattern.
+
+        The model chooses these, so without this check a hallucinated or
+        injected flag would reach the script.
+        """
+        allowlist = entry["args_allowlist"]
+        pattern = entry.get("args_pattern")
+
+        if not allowlist and not pattern:
+            return True
+
+        for arg in args:
+            if allowlist and arg in allowlist:
+                continue
+            # Values that cannot be enumerated (an app name) are admitted by
+            # pattern instead. The pattern is what bounds them: no quotes,
+            # semicolons, or pipes, and a hard length limit.
+            if pattern and pattern.fullmatch(arg):
+                continue
+            return False
+
+        return True
 
     @staticmethod
     def _extract_timeout(task):

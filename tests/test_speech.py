@@ -131,6 +131,37 @@ def test_model_id_splits_the_provider_suffix(monkeypatch, model_id, repo, provid
     assert settings.model_provider == provider
 
 
+def test_a_custom_endpoint_keeps_the_colon_in_the_model_name(monkeypatch):
+    """An Ollama model is 'qwen2.5:7b-instruct'; that colon is part of the name."""
+    monkeypatch.setenv("MODEL_NAME", "qwen2.5:7b-instruct")
+    monkeypatch.setenv("MODEL_BASE_URL", "http://localhost:11434/v1")
+    settings = Setting()
+
+    assert settings.model_repo == "qwen2.5:7b-instruct"
+    assert settings.model_provider is None
+
+
+def test_a_custom_endpoint_needs_no_hf_token(monkeypatch):
+    """A local server has no credential to give."""
+    monkeypatch.setenv("MODEL_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("HF_TOKEN", "")
+
+    helpers = ModelHelpers(Setting())
+    client = helpers.get_hf_client()
+
+    assert client is not None
+
+
+def test_the_hugging_face_path_still_demands_a_token(monkeypatch):
+    monkeypatch.delenv("MODEL_BASE_URL", raising=False)
+    monkeypatch.setenv("HF_TOKEN", "")
+
+    helpers = ModelHelpers(Setting())
+
+    with pytest.raises(ValueError, match="hf_token"):
+        helpers.get_hf_client()
+
+
 def test_chat_sends_the_repo_without_the_provider_suffix(helpers_with_fake_client):
     helpers, completions = helpers_with_fake_client
 

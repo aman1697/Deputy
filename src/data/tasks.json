@@ -16,6 +16,13 @@
     "errors         - optional {exit_code: name}. Turns a script's exit code",
     "                 into a named reason the caller can act on, instead of",
     "                 the default 'task_failed: exit N'.",
+    "args_pattern   - optional regex. An arg not in args_allowlist is accepted",
+    "                 when it matches this. For values that cannot be listed",
+    "                 up front, like an application name. Keep it tight: no",
+    "                 quotes, semicolons or pipes, and a length limit.",
+    "routable       - set false to hide a task from the router. It can still",
+    "                 be run directly by the service. Use for anything with",
+    "                 side effects that a model must not choose on its own.",
     "",
     "Script-backed tasks whose file is missing are hidden from the router until",
     "the script exists, so an entry can be added before it is implemented."
@@ -40,6 +47,34 @@
         "1": "calendar_service_unreachable",
         "2": "calendar_response_unreadable",
         "4": "not_signed_in_to_calendar"
+      }
+    },
+    {
+      "id": "launch-app",
+      "type": "powershell",
+      "executor": "launch-app.ps1",
+      "description": "Start, open, launch or run an application on this machine: 'open Chrome', 'start Notepad', 'launch Spotify', 'can you open VS Code'. Also answers whether an application is installed. Pass -Name followed by the application the user named.",
+      "allow_args": true,
+      "args_allowlist": ["-Name", "-Check"],
+      "args_pattern": "^[A-Za-z0-9][A-Za-z0-9 ._+-]{0,39}$",
+      "errors": {
+        "5": "app_not_installed",
+        "6": "app_would_not_start"
+      }
+    },
+    {
+      "id": "install-app",
+      "type": "powershell",
+      "executor": "install-app.ps1",
+      "description": "Install an application with winget. Never routed: the service runs this only after the user has explicitly agreed to an install it offered.",
+      "routable": false,
+      "allow_args": true,
+      "args_allowlist": ["-PackageId", "-Verify"],
+      "args_pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$",
+      "errors": {
+        "7": "winget_not_available",
+        "8": "package_not_found",
+        "9": "install_failed"
       }
     },
     {

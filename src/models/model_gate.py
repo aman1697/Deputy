@@ -33,6 +33,18 @@ class ModelGate:
         logger.debug("model reply: %s", reply)
         return reply
 
+    def lookup(self, content: str) -> str:
+        """Ask the model one small structured question and return the reply.
+
+        Routing sampling, not speech sampling: matching a name or recalling a
+        package identifier is a lookup, and the same question should give the
+        same answer every time.
+        """
+        logger.info("requesting lookup from %s (%d chars)", self.model_name, len(content or ""))
+        reply = self.helpers.chat(content)
+        logger.debug("lookup reply: %s", reply)
+        return reply
+
     def speak(self, content: str) -> str:
         """Turn a task result into one spoken line and return it.
 

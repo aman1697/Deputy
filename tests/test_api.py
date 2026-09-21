@@ -136,8 +136,11 @@ def test_speech_sees_the_execution_result(client):
     client.stub_speech(capture)
     client.post("/active_window", json={"content": "what os am i on"})
 
-    assert "host-info" in seen["prompt"]
+    # The task's stdout and the user's question, but not the task id: the model
+    # is told never to mention the machinery, so it is not given it.
     assert "system" in seen["prompt"]
+    assert "what os am i on" in seen["prompt"]
+    assert "host-info" not in seen["prompt"]
 
 
 def test_a_failed_task_is_still_spoken(client):

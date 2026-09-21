@@ -24,17 +24,30 @@ class ModelHelpers:
         if self._client is not None:
             return self._client
 
-        if not getattr(self.settings, "hf_token", None):
-            raise ValueError("Missing 'hf_token' in settings.")
+        base_url = getattr(self.settings, "model_base_url", None)
 
         try:
-            self._client = InferenceClient(
-                api_key=self.settings.hf_token,
-                provider=self.settings.model_provider or "auto",
-                timeout=self.settings.request_timeout,
-            )
+            if base_url:
+                # Any OpenAI-compatible endpoint: a local Ollama, Groq, or
+                # anything else. A local server needs no credential, but the
+                # client insists on some value, so a placeholder stands in.
+                self._client = InferenceClient(
+                    base_url=base_url,
+                    api_key=self.settings.hf_token or "not-required",
+                    timeout=self.settings.request_timeout,
+                )
+            else:
+                if not getattr(self.settings, "hf_token", None):
+                    raise ValueError("Missing 'hf_token' in settings.")
+                self._client = InferenceClient(
+                    api_key=self.settings.hf_token,
+                    provider=self.settings.model_provider or "auto",
+                    timeout=self.settings.request_timeout,
+                )
+        except ValueError:
+            raise
         except Exception as exc:
-            raise RuntimeError(f"Failed to initialize Hugging Face client: {exc}") from exc
+            raise RuntimeError(f"Failed to initialize inference client: {exc}") from exc
 
         return self._client
 

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import uuid
 from typing import Any, Optional
 
@@ -7,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from src.consumer.consume import Consumer
-from src.executor import calendar_auth
+from src.executor import app_install, calendar_auth
 from src.ingestor.context_ingest import Ingestor
 from src.ingestor.prompt_ingestor import PromptIngestor
 from src.models.model_gate import ModelGate, settings
@@ -15,8 +16,12 @@ from src.prompts.speech_prompt import (
     AUTH_START_FAILED,
     SPEECH_FALLBACK,
     auth_required_spoken,
+    install_failed_spoken,
+    install_offer_spoken,
+    install_success_spoken,
+    install_unknown_spoken,
 )
-from src.utils.helpers import audio_output_path, get_logger
+from src.utils.helpers import audio_output_path, extract_json_object, get_logger
 
 logger = get_logger(__name__)
 
@@ -29,6 +34,10 @@ app = FastAPI(
 model_gate = ModelGate()
 consumer = Consumer()
 ingestor = Ingestor()
+
+# Downloading and installing a package is nothing like running a local script,
+# so it gets its own budget rather than the runner's 60s default.
+INSTALL_TIMEOUT_SECONDS = 600
 
 
 class ModelRequest(BaseModel):
@@ -111,6 +120,12 @@ async def get_active_window(payload: ModelRequest):
     # even when routing fails, and it names this request's audio file.
     request_id = uuid.uuid4().hex[:12]
 
+    # "yes" is an answer to the install we offered, not a new question. Checked
+    # before routing, because the router has no idea what it refers to.
+    accepted = await _accepted_install(payload.content, request_id)
+    if accepted is not None:
+        return accepted
+
     try:
         prompt = ingestor_for_query.ingest_routes()
 
@@ -129,8 +144,17 @@ async def get_active_window(payload: ModelRequest):
     # answer with the code, rather than telling them "that didn't work".
     auth = await _offer_sign_in(execution)
 
+    # An app the user asked for but does not have is likewise a conversation,
+    # not an error: resolve what they meant, then offer to install it.
+    missing_app = None
+    if auth is None and execution.get("error") == "app_not_installed":
+        execution, missing_app = await _handle_missing_app(execution, request_id)
+        result = execution.get("result") or {}
+
     if auth is not None:
         spoken_text = auth["spoken"]
+    elif missing_app is not None:
+        spoken_text = missing_app
     else:
         # Speech is presentation, not the answer. The task has already run by
         # this point, so a failure here degrades the reply rather than
@@ -188,6 +212,131 @@ async def _offer_sign_in(execution: dict[str, Any]) -> Optional[dict[str, Any]]:
         "user_code": code,
         "verification_uri": payload.get("verificationUri"),
     }
+
+
+def _model_json(reply: str, key: str):
+    """Pull one key out of a model's JSON reply, or None.
+
+    The model is asked for a bare object, but the same lenient recovery the
+    router relies on applies here: fences and preambles are common.
+    """
+    payload = extract_json_object(reply or "")
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(key)
+    return value if isinstance(value, str) and value.strip() else None
+
+
+async def _handle_missing_app(execution, request_id):
+    """Work out what app was meant, then launch it or offer to install it.
+
+    Returns (execution, spoken_or_None). A spoken string means the exchange
+    ended here; None means `execution` now holds a real result to narrate.
+    """
+    result = execution.get("result") or {}
+    payload = extract_json_object(result.get("output") or "") or {}
+    requested = payload.get("requested") or ""
+    inventory = payload.get("inventory") or []
+
+    # Literal matching already failed. "vs code" is not a substring of "Visual
+    # Studio Code", so ask the model to match it against what is installed.
+    if inventory:
+        try:
+            prompt = PromptIngestor.ingest_app_match(requested, inventory)
+            match = _model_json(await asyncio.to_thread(model_gate.lookup, prompt), "match")
+        except Exception:
+            logger.exception("app name resolution failed for %r", requested)
+            match = None
+
+        # Only a name the machine actually reported counts; a model that
+        # invents one would have us launch something nobody has.
+        if match in inventory:
+            logger.info("resolved %r to installed app %r", requested, match)
+            retry = await asyncio.to_thread(
+                consumer.consume,
+                json.dumps({"task_id": "launch-app", "args": ["-Name", match]}),
+                request_id,
+            )
+            return retry, None
+
+    return execution, await _offer_install(requested)
+
+
+async def _offer_install(app_name: str) -> str:
+    """Find the package for an app we do not have, and offer to install it."""
+    if not app_name:
+        return install_unknown_spoken("that")
+
+    try:
+        prompt = PromptIngestor.ingest_package_id(app_name)
+        package_id = _model_json(
+            await asyncio.to_thread(model_gate.lookup, prompt), "package_id"
+        )
+    except Exception:
+        logger.exception("package lookup failed for %r", app_name)
+        package_id = None
+
+    # The model's answer is untrusted: it reaches the install script only if it
+    # looks like an identifier and nothing else.
+    if not app_install.is_valid_package_id(package_id):
+        if package_id:
+            logger.warning("refusing implausible package id %r", package_id)
+        return install_unknown_spoken(app_name)
+
+    app_install.offer(app_name, package_id)
+    return install_offer_spoken(app_name)
+
+
+async def _accepted_install(content: str, request_id: str):
+    """Run the install the user just agreed to, or return None.
+
+    Returns None unless there is a live offer *and* this message is a plain
+    yes, so an unrelated question is never mistaken for consent.
+    """
+    if not app_install.is_affirmative(content):
+        return None
+
+    pending = app_install.take_offer()
+    if pending is None:
+        return None
+
+    app_name = pending["app_name"]
+    logger.info("installing %s (%s) on the user's say-so", app_name, pending["package_id"])
+
+    execution = await asyncio.to_thread(
+        consumer.consume,
+        json.dumps(
+            {
+                "task_id": "install-app",
+                "args": ["-PackageId", pending["package_id"]],
+                # Installs are slow; the 60s default would kill most of them
+                # partway through.
+                "timeout": INSTALL_TIMEOUT_SECONDS,
+            }
+        ),
+        request_id,
+    )
+
+    if execution["ok"]:
+        spoken = install_success_spoken(app_name)
+    else:
+        spoken = install_failed_spoken(app_name, execution.get("error"))
+
+    result = execution.get("result") or {}
+    audio_path = await _synthesize(spoken, request_id)
+
+    return ModelResponse(
+        request_id=request_id,
+        ok=execution["ok"],
+        task_id="install-app",
+        output=result.get("output", ""),
+        error=execution.get("error"),
+        stderr=result.get("stderr", ""),
+        routing_reply="",  # no routing happened; this answered a standing offer
+        spoken_text=spoken,
+        audio_path=audio_path,
+        execution=execution,
+    )
 
 
 async def _speak(prompt_ingestor: PromptIngestor, execution: dict[str, Any]) -> str:

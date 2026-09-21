@@ -1,4 +1,5 @@
 import json
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -21,6 +22,20 @@ def _clean_string_list(raw):
     return tuple(
         item.strip() for item in raw if isinstance(item, str) and item.strip()
     )
+
+
+def _compile_pattern(raw):
+    """Compile an args_pattern, or None. A broken pattern disables it.
+
+    Falling back to None is the safe direction: an arg then has to be in the
+    allowlist, rather than a malformed pattern silently accepting anything.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        return re.compile(raw)
+    except re.error:
+        return None
 
 
 def _clean_error_map(raw):
@@ -50,10 +65,19 @@ def _build_entry(task_id, executor, task_type, task):
         # difference between "this task takes flags" and "this task takes
         # arbitrary attacker-chosen flags".
         "args_allowlist": _clean_string_list(task.get("args_allowlist")),
+        # Some arguments cannot be enumerated - an application name is whatever
+        # the user says. An arg not in the allowlist is accepted only if it
+        # matches this pattern, which keeps the value bounded and free of shell
+        # metacharacters even though its content is open-ended.
+        "args_pattern": _compile_pattern(task.get("args_pattern")),
         # A script can distinguish its failure modes by exit code; this turns
         # them into names a caller can act on, rather than "exit 4". Declared in
         # the registry so adding one stays a tasks.json edit.
         "errors_by_exit": _clean_error_map(task.get("errors")),
+        # Tasks the model must never choose. They still run - the service
+        # invokes them directly - but they are hidden from the router, so an
+        # action with side effects is only ever taken deliberately.
+        "routable": task.get("routable") is not False,
     }
 
 
@@ -178,6 +202,8 @@ def catalog(available_only=False):
     view = []
 
     for entry in sorted(load().values(), key=lambda item: item["id"]):
+        if not entry["routable"]:
+            continue
         if available_only and not is_available(entry):
             continue
 
