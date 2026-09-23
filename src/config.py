@@ -39,6 +39,13 @@ class Setting(BaseSettings):
     # Set AUDIO_ENABLED=true once the GPU side is available.
     audio_enabled: bool = False
 
+    # Speech-to-text runs fine on CPU - unlike TTS, this is not GPU-blocked -
+    # so it defaults on. base.en is noticeably better than tiny.en at catching
+    # a spoken app or file name without costing much: a few seconds either way
+    # for a short command.
+    stt_enabled: bool = True
+    stt_model_size: str = "base.en"
+
     # Without a timeout a stalled inference call holds the request open
     # indefinitely and ties up a worker thread.
     request_timeout: int = 30

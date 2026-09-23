@@ -31,3 +31,12 @@ GRAPH_TOKEN_FILE = (
     if _LOCAL_APPDATA
     else Path.home() / ".deputy" / "graph-token.xml"
 )
+
+# Where faster-whisper caches downloaded model weights. A named, gitignored
+# directory next to the project rather than the library's default cache dir,
+# so it is obvious where a few hundred MB of model files landed.
+STT_MODEL_DIR = ROOT.parent / "stt-models"
+
+# Upper bound on one voice clip. A phrase like "do I have any meetings today"
+# is a few seconds; this is generous headroom, not a target.
+MAX_AUDIO_UPLOAD_BYTES = 15 * 1024 * 1024

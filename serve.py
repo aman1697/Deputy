@@ -4,7 +4,7 @@ import uuid
 from typing import Any, Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from src.consumer.consume import Consumer
@@ -12,6 +12,7 @@ from src.executor import app_install, calendar_auth
 from src.ingestor.context_ingest import Ingestor
 from src.ingestor.prompt_ingestor import PromptIngestor
 from src.models.model_gate import ModelGate, settings
+from src.models.speech_to_text import SpeechToText
 from src.prompts.speech_prompt import (
     AUTH_START_FAILED,
     SPEECH_FALLBACK,
@@ -21,6 +22,7 @@ from src.prompts.speech_prompt import (
     install_success_spoken,
     install_unknown_spoken,
 )
+from src.utils.constants import MAX_AUDIO_UPLOAD_BYTES
 from src.utils.helpers import audio_output_path, extract_json_object, get_logger
 
 logger = get_logger(__name__)
@@ -34,6 +36,7 @@ app = FastAPI(
 model_gate = ModelGate()
 consumer = Consumer()
 ingestor = Ingestor()
+speech_to_text = SpeechToText(settings)
 
 # Downloading and installing a package is nothing like running a local script,
 # so it gets its own budget rather than the runner's 60s default.
@@ -64,6 +67,9 @@ class ModelResponse(BaseModel):
     spoken_text: str = Field("", description="The result rephrased to be read aloud.")
     audio_path: Optional[str] = Field(
         None, description="Path to the synthesised speech, if audio is enabled."
+    )
+    transcript: Optional[str] = Field(
+        None, description="What speech-to-text heard, when the query came in as audio."
     )
     execution: dict[str, Any] = Field(..., description="Full execution envelope.")
 
@@ -115,14 +121,64 @@ async def get_active_window(payload: ModelRequest):
     if not payload.content or not payload.content.strip():
         raise HTTPException(status_code=400, detail="Missing 'content' in request body.")
 
-    ingestor_for_query = PromptIngestor(payload.content)
+    return await _answer_query(payload.content)
+
+
+@app.post(
+    "/listen",
+    response_model=ModelResponse,
+    summary="Transcribe a spoken query, then route and run it",
+    responses={
+        400: {"model": ErrorResponse, "description": "Bad or unintelligible recording."},
+        500: {"model": ErrorResponse, "description": "Inference or execution failure."},
+        503: {"model": ErrorResponse, "description": "Speech-to-text is disabled."},
+    },
+)
+async def listen(file: UploadFile = File(..., description="A short voice recording.")):
+    """The voice door into the same pipeline `/active_window` uses.
+
+    Transcribes the upload, then hands the text to `_answer_query` exactly as
+    a typed request would: everything downstream of routing has no idea, and
+    no reason to care, whether the question was typed or spoken.
+    """
+    if not settings.stt_enabled:
+        raise HTTPException(status_code=503, detail="Speech-to-text is disabled (STT_ENABLED).")
+
+    audio_bytes = await file.read()
+    if len(audio_bytes) > MAX_AUDIO_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Recording is larger than the allowed limit.")
+
+    try:
+        transcript = await asyncio.to_thread(speech_to_text.transcribe, audio_bytes)
+    except ValueError as exc:
+        # Empty, too short, or no words made out - a bad recording, not a
+        # server fault.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("transcription failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    logger.info("transcribed %d bytes -> %r", len(audio_bytes), transcript)
+
+    response = await _answer_query(transcript)
+    response.transcript = transcript
+    return response
+
+
+async def _answer_query(content: str) -> ModelResponse:
+    """Route a query to a task, run it, and phrase the result.
+
+    Shared by /active_window and /listen: from here down, text is text,
+    regardless of whether it arrived typed or spoken.
+    """
+    ingestor_for_query = PromptIngestor(content)
     # Generated here, not asked of the model: it has to be present and unique
     # even when routing fails, and it names this request's audio file.
     request_id = uuid.uuid4().hex[:12]
 
     # "yes" is an answer to the install we offered, not a new question. Checked
     # before routing, because the router has no idea what it refers to.
-    accepted = await _accepted_install(payload.content, request_id)
+    accepted = await _accepted_install(content, request_id)
     if accepted is not None:
         return accepted
 

@@ -153,7 +153,9 @@ def test_a_custom_endpoint_needs_no_hf_token(monkeypatch):
 
 
 def test_the_hugging_face_path_still_demands_a_token(monkeypatch):
-    monkeypatch.delenv("MODEL_BASE_URL", raising=False)
+    # Explicitly empty, not deleted: deleting it would fall through to
+    # whatever MODEL_BASE_URL a developer's own .env happens to have set.
+    monkeypatch.setenv("MODEL_BASE_URL", "")
     monkeypatch.setenv("HF_TOKEN", "")
 
     helpers = ModelHelpers(Setting())

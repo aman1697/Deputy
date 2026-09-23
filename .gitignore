@@ -253,3 +253,6 @@ tmp/
 
 # Synthesised speech. Generated per request; nothing here is source.
 src/audio/
+
+# Downloaded whisper model weights.
+stt-models/
