@@ -71,11 +71,37 @@ It binds `127.0.0.1` by default. The service runs local scripts on this
 machine, so set `HOST=0.0.0.0` only if you actually want that reachable from
 the network — and put authentication in front of it first.
 
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /active_window` | Route a query and run the task |
-| `GET /tasks` | What the agent can currently do |
-| `GET /health` | Liveness |
+## HTTP API
+
+The API is served at `http://localhost:5000` by default. FastAPI's interactive
+API reference is available at `/docs`.
+
+| Method and endpoint | Request | Purpose |
+| --- | --- | --- |
+| `POST /active_window` | JSON: `{"content": "..."}` | Route a typed natural-language query and run the selected task. |
+| `POST /listen` | Multipart form with an audio `file` | Transcribe a spoken query, then run it through the same pipeline. Requires `STT_ENABLED=true` (enabled by default); uploads are limited to 15 MiB. |
+| `GET /tasks` | — | List available tasks and registered tasks whose scripts are missing. |
+| `GET /calendar/status` | — | Report whether calendar sign-in is active. |
+| `POST /calendar/login` | Optional query parameter `open_browser` (default `true`) | Start the calendar device-code sign-in flow and return the code and verification URL. |
+| `POST /calendar/logout` | — | Delete cached calendar tokens and return the updated sign-in status. |
+| `GET /health` | — | Return `{"status": "ok"}` when the service is running. |
+
+For example, submit a typed query or a recording:
+
+```
+curl -X POST http://localhost:5000/active_window \
+  -H "Content-Type: application/json" \
+  -d '{"content":"what app am i working on?"}'
+
+curl -X POST http://localhost:5000/listen \
+  -F "file=@question.wav"
+```
+
+Both query endpoints return the execution result along with `spoken_text` and
+`audio_path` (null when audio synthesis is disabled). The `/listen` response
+also includes the recognized `transcript`. A task failure is reported in the
+response with `ok: false`; invalid requests and service failures use HTTP error
+statuses.
 
 ## Calendar access
 
